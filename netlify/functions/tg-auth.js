@@ -30,8 +30,33 @@ function cors(origin) {
     "Cache-Control": "no-store",
     "Vary": "Origin",
   };
-  if (allowed && origin === allowed) {
-    h["Access-Control-Allow-Origin"] = allowed;
+  // 🔒 FIX: Blogger/Blogspot country-domain redirect ka masla —
+  // "earnzonegamefile.blogspot.com" waale visitors ko unke desh ke hisaab
+  // se kabhi kabhi "earnzonegamefile.blogspot.in", ".ru", ".co.uk" waghera
+  // pe le jaaya jaata hai. Browser ka Origin header ussi waqt badal jaata
+  // hai, isliye sirf EXACT match karne se un users ke liye CORS fail ho
+  // jaata tha (asal ban nahi, sirf origin mismatch). Ab hum ALLOWED_ORIGIN
+  // ke sirf hostname ka pehla hissa (subdomain) nikaal kar us blogspot
+  // subdomain ke KISI BHI country-TLD variant ko allow karte hain.
+  let isAllowed = false;
+  if (allowed && origin) {
+    if (origin === allowed) {
+      isAllowed = true;
+    } else {
+      try {
+        const allowedHost = new URL(allowed).hostname; // e.g. earnzonegamefile.blogspot.com
+        const originUrl = new URL(origin);
+        const m = allowedHost.match(/^([a-z0-9-]+)\.blogspot\.[a-z.]+$/i);
+        if (m && originUrl.protocol === "https:") {
+          const subdomain = m[1];
+          const originHostRe = new RegExp("^" + subdomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\.blogspot\\.[a-z.]+$", "i");
+          if (originHostRe.test(originUrl.hostname)) isAllowed = true;
+        }
+      } catch (_) { /* malformed origin/allowed — ignore, isAllowed stays false */ }
+    }
+  }
+  if (isAllowed) {
+    h["Access-Control-Allow-Origin"] = origin;
     h["Access-Control-Allow-Methods"] = "POST, OPTIONS";
     h["Access-Control-Allow-Headers"] = "Content-Type";
   }
