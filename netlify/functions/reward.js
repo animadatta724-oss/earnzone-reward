@@ -1,21 +1,14 @@
-// EarnZone — Monetag Postback receiver (v3 — Adsgram se Monetag mein switch)
+// EarnZone — Monetag Postback receiver (v4 — hardened)
+// Changes vs v3:
+//  - reward sirf "yes" par credit (missing/empty/other => ignore)
+//  - ymid strict format: tg_<digits> (fake/junk user nodes nahi banenge)
+//  - secret constant-time compare
+//  - sirf EXISTING user ko flag milta hai (update() naya node bana deta tha)
 //
-// Yeh function sirf itna karta hai — "haan, is user ne genuinely rewarded ad
-// dekh li" — aur Firebase mein ek chhota sa timestamp flag (adVerifiedAt)
-// likh deta hai. Asli reward-calculation (spin wheel, scratch card, slot
-// machine ka random result) client-side hi hota hai, admin panel ki values
-// se — bas ab woh sirf tab commit hoga jab Firebase Rules ko ek fresh,
-// unused adVerifiedAt flag milega.
-//
-// Monetag apna postback call GET request se bhejta hai, jisme hum khud
-// apna 'secret' query param add karte hain (Monetag SSP dashboard mein
-// postback URL configure karte waqt). Macros ({ymid}, {reward_event_type}
-// waghera) Monetag khud replace karke bhejta hai — inhe hum apni Netlify
-// function ke URL mein query params ki tarah likhte hain.
-//
-// Postback URL jo Monetag dashboard mein daalni hai:
+// Postback URL (Monetag):
 // https://tumhari-site.netlify.app/.netlify/functions/reward?ymid={ymid}&event={event_type}&reward={reward_event_type}&secret=TUMHARA_SECRET
 
+const crypto = require("crypto");
 const admin = require("firebase-admin");
 
 if (!admin.apps.length) {
@@ -28,45 +21,53 @@ if (!admin.apps.length) {
     databaseURL: process.env.FIREBASE_DB_URL,
   });
 }
-
 const db = admin.database();
+
+function secretOk(given) {
+  const expected = process.env.REWARD_SECRET || "";
+  if (!expected || typeof given !== "string") return false;
+  const a = crypto.createHash("sha256").update(given).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
 
 exports.handler = async (event) => {
   try {
     const params = event.queryStringParameters || {};
     const { ymid, secret, reward } = params;
 
-    // Secret verify — Monetag ka postback call unsigned hota hai,
-    // isliye apna khud ka secret hi security layer hai.
-    if (!secret || secret !== process.env.REWARD_SECRET) {
-      return { statusCode: 403, body: "Forbidden" };
+    if (!secretOk(secret)) return { statusCode: 403, body: "Forbidden" };
+
+    if (typeof ymid !== "string" || !/^tg_[0-9]{1,15}$/.test(ymid)) {
+      return { statusCode: 400, body: "Bad ymid" };
     }
 
-    if (!ymid) {
-      return { statusCode: 400, body: "Missing ymid" };
+    if (String(reward || "").toLowerCase() !== "yes") {
+      console.warn("reward ignored, value:", JSON.stringify(reward));
+      return { statusCode: 200, body: "Ignored" };
     }
 
-    // ✅ reward_event_type check: Monetag ki official values "yes" (paid/valid)
-    // ya "no" (non-paid/fraud/invalid traffic) hoti hain — "no" par credit mat do.
-    if (reward === "no") {
-      return { statusCode: 200, body: "Ignored — reward_event_type=no for " + ymid };
+    const userRef = db.ref("users/" + ymid);
+    // Sirf existing user (pts field hamesha game save ke saath banta hai)
+    const exists = (await userRef.child("pts").once("value")).exists();
+    if (!exists) return { statusCode: 200, body: "Ignored — unknown user" };
+
+    // 🔒 SECURITY: replay/abuse guard — agar REWARD_SECRET kabhi leak ho jaaye
+    // (logs, referrer headers, browser history mein postback URL dikh sakta hai),
+    // koi bhi is URL ko baar-baar seedha call karke real ad dekhe bina hi
+    // adVerifiedAt reset kar sakta tha. Ab ek hi ymid ke liye 60s se kam gap
+    // mein dobara verify nahi hoga — genuine Monetag postbacks isse affect
+    // nahi hote (ek ad completion = ek hi postback call).
+    const lastVerified = (await userRef.child("adVerifiedAt").once("value")).val();
+    if (typeof lastVerified === "number" && Date.now() - lastVerified < 60000) {
+      console.warn("reward ignored — too soon after last verify, ymid:", ymid);
+      return { statusCode: 200, body: "Ignored — rate limited" };
     }
 
-    // ✅ ymid hi hamara appUid hai — game mein show ad call karte waqt
-    // hum ymid: getUserId() pass karte hain, jo already 'tg_<telegramId>'
-    // format mein hai. Isliye yahan koi prefix jodne ki zaroorat nahi.
-    const appUid = ymid;
-
-    // Sirf ek flag likho — Admin SDK Firebase Rules ko bypass karta hai,
-    // isliye yeh write hamesha safal hoga, chahe client ke liye woh
-    // field locked ho.
-    await db.ref("users/" + appUid).update({
-      adVerifiedAt: admin.database.ServerValue.TIMESTAMP,
-    });
-
-    return { statusCode: 200, body: "OK — ad verified for " + appUid };
+    await userRef.update({ adVerifiedAt: admin.database.ServerValue.TIMESTAMP });
+    return { statusCode: 200, body: "OK" };
   } catch (err) {
-    console.error("reward function error:", err);
+    console.error("reward function error:", err && err.message);
     return { statusCode: 500, body: "Server error" };
   }
 };
