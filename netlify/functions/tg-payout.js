@@ -7,7 +7,7 @@
 //
 // Netlify env vars:
 //   TG_PAYOUT_BOT_TOKEN    (payout-proof channel ka bot — tg-auth wale TELEGRAM_BOT_TOKEN se ALAG bot rakho)
-//   TG_PAYOUT_CHANNEL_ID   (e.g. @EarnZonePayouts ya -1001234567890)
+//   TG_PAYOUT_CHANNEL_ID   (e.g. @your_channel ya -1001234567890)
 //   ADMIN_EMAIL            (optional, comma-separated, default suman@earnzone.com)
 //   + Firebase `adminEmails/{email with . -> ,}` = true wale saare admins bhi allowed (admin panel super-admin login par sync karta hai)
 //   ADMIN_ORIGIN           (admin panel ka origin, comma-separated ho sakta hai, e.g. https://admin.tumhari-site.com)
