@@ -1,0 +1,10 @@
+{
+  "name": "earnzone-functions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "EarnZone Netlify functions (tg-auth, task-claim, referral, reward, tg-payout)",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}
