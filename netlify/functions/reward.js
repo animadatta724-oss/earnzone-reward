@@ -1,5 +1,6 @@
-// EarnZone — Monetag Postback receiver (v4 — hardened)
-// v6: Monetag ka reward_event_type 'valued' / 'not_valued' hota hai (docs.monetag.com) — pehle sirf "yes" accept hota tha,
+// EarnZone â€” Monetag Postback receiver (v4 â€” hardened)
+// v7: user-exists check ab pts par nahi, poore node par (pts-write reject hone wale users ke liye deadlock tha)
+// v6: Monetag ka reward_event_type 'valued' / 'not_valued' hota hai (docs.monetag.com) â€” pehle sirf "yes" accept hota tha,
 //     isliye asli postback ignore ho jaata tha. Ab 'valued' (aur purana 'yes') accept; click events ignore (sirf event=impression).
 // v5: rate-limit atomic (transaction) + gap 60s -> 10s (REWARD_MIN_GAP_MS)
 // Changes vs v3:
@@ -49,7 +50,7 @@ exports.handler = async (event) => {
     const evt = String(params.event || params.event_type || "").toLowerCase();
     if (evt && evt !== "impression") {
       console.warn("reward ignored, event:", JSON.stringify(evt));   // click postback verify nahi karta
-      return { statusCode: 200, body: "Ignored — not impression" };
+      return { statusCode: 200, body: "Ignored â€” not impression" };
     }
     const rv = String(reward || "").toLowerCase();
     if (rv !== "valued" && rv !== "yes") {                          // "yes" = purane URL ke saath backward-compatible
@@ -58,11 +59,16 @@ exports.handler = async (event) => {
     }
 
     const userRef = db.ref("users/" + ymid);
-    // Sirf existing user (pts field hamesha game save ke saath banta hai)
-    const exists = (await userRef.child("pts").once("value")).exists();
-    if (!exists) return { statusCode: 200, body: "Ignored — unknown user" };
+    // Sirf existing user. v7 FIX: pehle `pts` field dekhta tha â€” par jis user ka pehla pts-write rules ne reject kiya
+    // (kyunki ad-proof hi nahi tha) uske node mein pts kabhi banta nahi, to postback hamesha "unknown user" hota aur
+    // ad-proof kabhi nahi milta (deadlock). Ab node mein koi bhi field ho (name/lastDevice/code/...) to user maana jaata hai.
+    const uSnap = await userRef.once("value");
+    const uVal = uSnap.val();
+    const exists = uSnap.exists() && uVal && typeof uVal === "object" &&
+      (typeof uVal.pts === "number" || typeof uVal.lastDevice === "string" || typeof uVal.name === "string" || typeof uVal.code === "string");
+    if (!exists) return { statusCode: 200, body: "Ignored â€” unknown user" };
 
-    // 🔒 SECURITY: replay/abuse guard (secret leak hone par direct URL spam rokta hai).
+    // ðŸ”’ SECURITY: replay/abuse guard (secret leak hone par direct URL spam rokta hai).
     // FIX (#5): pehle gap 60s tha aur check + write alag the:
     //   - genuine user 60s ke andar doosra ad dekhta to postback "Ignored" hota aur game
     //     30s baad "Ad verify nahi ho paya" dikhata tha (reward gayab)
@@ -76,8 +82,8 @@ exports.handler = async (event) => {
       (typeof cur === "number" && now - cur < minGap) ? undefined : now   // undefined = abort (too soon)
     );
     if (!tx.committed) {
-      console.warn("reward ignored — too soon after last verify, ymid:", ymid);
-      return { statusCode: 200, body: "Ignored — rate limited" };
+      console.warn("reward ignored â€” too soon after last verify, ymid:", ymid);
+      return { statusCode: 200, body: "Ignored â€” rate limited" };
     }
     return { statusCode: 200, body: "OK" };
   } catch (err) {
